@@ -90,6 +90,23 @@ paimon> select my_database.my_table
 paimon> select my_database.my_table 20
 ```
 
+#### 查询表数据（使用 filter 过滤）
+```
+paimon> select my_database.my_table where age>18
+paimon> select my_database.my_table 10 where age>18
+paimon> select my_database.my_table where age>=18 AND name=Alice
+paimon> select my_database.my_table 20 where id!=5
+```
+
+支持的过滤操作符：
+- `=` - 等于
+- `!=` - 不等于
+- `>` - 大于
+- `<` - 小于
+- `>=` - 大于等于
+- `<=` - 小于等于
+- `AND` - 多个条件组合（不区分大小写）
+
 #### 查看帮助
 ```
 paimon> help
@@ -122,13 +139,14 @@ paimon> quit
 配置信息: StorageConfig{type=LOCAL, warehouse='/tmp/paimon-warehouse', options=0 entries}
 
 可用命令:
-  show databases                    - 显示所有数据库
-  show tables <database>            - 显示指定数据库的所有表
-  desc <database>.<table>           - 显示表结构
-  count <database>.<table>          - 查询表的总行数
-  select <database>.<table> [limit] - 查询表数据，可选 limit 参数
-  help                              - 显示帮助信息
-  exit/quit                         - 退出程序
+  show databases                              - 显示所有数据库
+  show tables <database>                      - 显示指定数据库的所有表
+  desc <database>.<table>                     - 显示表结构
+  count <database>.<table>                    - 查询表的总行数
+  select <database>.<table> [limit] [where <filter>]
+                                              - 查询表数据，可选 limit 和 filter 参数
+  help                                        - 显示帮助信息
+  exit/quit                                   - 退出程序
 
 paimon> show databases
 
@@ -175,6 +193,19 @@ id                   | name                 | age                  |
 5                    | Eve                  | 32                   | 
 
 显示 5 行数据
+
+paimon> select default.users where age>30
+
+Applied filter: age>30
+
+表: default.users
+====================
+id                   | name                 | age                  |
+---------------------+-+---------------------+-+---------------------+-+
+3                    | Charlie              | 35                   |
+5                    | Eve                  | 32                   |
+
+显示 2 行数据
 
 paimon> exit
 再见!
