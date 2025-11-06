@@ -9,7 +9,7 @@
 - ✅ 查看表列表
 - ✅ 查看表结构（字段、类型、主键、分区键等）
 - ✅ 查询表总行数
-- ✅ 查询表数据（支持 limit）
+- ✅ 查询表数据（支持 limit、分页查询、条件过滤）
 - ✅ 纯 Java API 实现，无需 Flink 或 Spark
 
 ## 构建
@@ -90,12 +90,23 @@ paimon> select my_database.my_table
 paimon> select my_database.my_table 20
 ```
 
+#### 查询表数据（分页查询所有数据）
+使用 `all` 关键字启用分页模式，每页显示 5 行数据，输入 `it` 继续查看下一页：
+```
+paimon> select my_database.my_table all
+```
+
 #### 查询表数据（使用 filter 过滤）
 ```
 paimon> select my_database.my_table where age>18
 paimon> select my_database.my_table 10 where age>18
 paimon> select my_database.my_table where age>=18 AND name=Alice
 paimon> select my_database.my_table 20 where id!=5
+```
+
+#### 查询表数据（分页查询 + 过滤）
+```
+paimon> select my_database.my_table all where age>18
 ```
 
 支持的过滤操作符：
@@ -143,8 +154,9 @@ paimon> quit
   show tables <database>                      - 显示指定数据库的所有表
   desc <database>.<table>                     - 显示表结构
   count <database>.<table>                    - 查询表的总行数
-  select <database>.<table> [limit] [where <filter>]
+  select <database>.<table> [limit|all] [where <filter>]
                                               - 查询表数据，可选 limit 和 filter 参数
+                                                使用 'all' 启用分页模式（每页 5 行）
   help                                        - 显示帮助信息
   exit/quit                                   - 退出程序
 
@@ -206,6 +218,32 @@ id                   | name                 | age                  |
 5                    | Eve                  | 32                   |
 
 显示 2 行数据
+
+paimon> select default.users all
+
+表: default.users
+====================
+id                   | name                 | age                  |
+---------------------+-+---------------------+-+---------------------+-+
+1                    | Alice                | 25                   |
+2                    | Bob                  | 30                   |
+3                    | Charlie              | 35                   |
+4                    | David                | 28                   |
+5                    | Eve                  | 32                   |
+
+--- Page complete (5 rows) ---
+Type 'it' to continue, or press Enter to stop: it
+
+6                    | Frank                | 27                   |
+7                    | Grace                | 29                   |
+8                    | Henry                | 31                   |
+9                    | Ivy                  | 26                   |
+10                   | Jack                 | 33                   |
+
+--- Page complete (5 rows) ---
+Type 'it' to continue, or press Enter to stop:
+
+Total displayed: 10 row(s)
 
 paimon> exit
 再见!

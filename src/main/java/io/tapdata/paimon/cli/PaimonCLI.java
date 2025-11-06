@@ -298,15 +298,18 @@ public class PaimonCLI {
         System.out.println("  show tables <database>                      - Show all tables in a database");
         System.out.println("  desc <database>.<table>                     - Show table structure");
         System.out.println("  count <database>.<table>                    - Count total rows in a table");
-        System.out.println("  select <database>.<table> [limit] [where <filter>]");
+        System.out.println("  select <database>.<table> [limit|all] [where <filter>]");
         System.out.println("                                              - Query table data with optional limit and filter");
+        System.out.println("                                                Use 'all' for pagination mode (5 rows/page)");
         System.out.println("  help                                        - Show help information");
         System.out.println("  exit/quit                                   - Exit the program");
         System.out.println();
-        System.out.println("Filter examples:");
-        System.out.println("  select default.users 10 where age>18");
+        System.out.println("Query examples:");
+        System.out.println("  select default.users 10                     - Show first 10 rows");
+        System.out.println("  select default.users all                    - Show all rows with pagination (type 'it' to continue)");
+        System.out.println("  select default.users 10 where age>18        - Show 10 rows where age > 18");
+        System.out.println("  select default.users all where age>18       - Show all rows where age > 18 with pagination");
         System.out.println("  select default.users where age>=18 AND name=Alice");
-        System.out.println("  select default.users 20 where id!=5");
         System.out.println();
     }
 
@@ -372,14 +375,17 @@ public class PaimonCLI {
 
     /**
      * Handle select command
-     * Supports: select <database>.<table> [limit] [where <filter>]
+     * Supports: select <database>.<table> [limit|all] [where <filter>]
      */
     private void handleSelectCommand(String[] parts) {
         if (parts.length < 2) {
-            System.err.println("Usage: select <database>.<table> [limit] [where <filter>]");
+            System.err.println("Usage: select <database>.<table> [limit|all] [where <filter>]");
             System.err.println("Example: select default.users 10");
+            System.err.println("Example: select default.users all");
+            System.err.println("Example: select default.users all where age>18");
             System.err.println("Example: select default.users 10 where age>18");
             System.err.println("Example: select default.users where age>=18 AND name=Alice");
+            System.err.println("\nNote: Using 'all' enables pagination mode (5 rows per page, type 'it' to continue)");
             return;
         }
 
@@ -391,17 +397,23 @@ public class PaimonCLI {
 
         int limit = 10; // Default limit
         String filter = null;
+        boolean usePagination = false;
 
         // Parse remaining arguments
         int currentIndex = 2;
 
-        // Check if next argument is a number (limit)
+        // Check if next argument is a number (limit) or "all" keyword
         if (currentIndex < parts.length) {
-            try {
-                limit = Integer.parseInt(parts[currentIndex]);
+            if ("all".equalsIgnoreCase(parts[currentIndex])) {
+                usePagination = true;
                 currentIndex++;
-            } catch (NumberFormatException e) {
-                // Not a number, might be "where" keyword
+            } else {
+                try {
+                    limit = Integer.parseInt(parts[currentIndex]);
+                    currentIndex++;
+                } catch (NumberFormatException e) {
+                    // Not a number, might be "where" keyword
+                }
             }
         }
 
@@ -419,7 +431,12 @@ public class PaimonCLI {
             filter = filterBuilder.toString();
         }
 
-        dataQueryService.selectTable(dbTable[0], dbTable[1], limit, filter);
+        // Execute query with or without pagination
+        if (usePagination) {
+            dataQueryService.selectTableWithPagination(dbTable[0], dbTable[1], filter);
+        } else {
+            dataQueryService.selectTable(dbTable[0], dbTable[1], limit, filter);
+        }
     }
 
     /**

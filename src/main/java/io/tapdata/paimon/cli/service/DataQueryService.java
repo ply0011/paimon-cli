@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -132,6 +133,108 @@ public class DataQueryService {
             }
 
             System.out.println("\nDisplayed " + rowCount + " row(s)\n");
+        } catch (Exception e) {
+            System.err.println("Failed to query data: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Query table data with pagination support
+     * Default page size is 5 rows, type 'it' to continue to next page
+     */
+    public void selectTableWithPagination(String database, String tableName, String filterExpression) {
+        selectTableWithPagination(database, tableName, filterExpression, 5);
+    }
+
+    /**
+     * Query table data with pagination support and custom page size
+     */
+    public void selectTableWithPagination(String database, String tableName, String filterExpression, int pageSize) {
+        try {
+            if (!catalogManager.tableExists(database, tableName)) {
+                System.err.println("Table does not exist: " + database + "." + tableName);
+                return;
+            }
+
+            Table table = catalogManager.getTable(database, tableName);
+            RowType rowType = table.rowType();
+
+            // Build read builder
+            ReadBuilder readBuilder = table.newReadBuilder();
+
+            // Parse and apply filter if provided
+            if (filterExpression != null && !filterExpression.trim().isEmpty()) {
+                try {
+                    List<Predicate> predicates = parseFilter(filterExpression, rowType);
+                    if (!predicates.isEmpty()) {
+                        readBuilder = readBuilder.withFilter(predicates);
+                        System.out.println("\nApplied filter: " + filterExpression);
+                    }
+                } catch (Exception e) {
+                    System.err.println("Failed to parse filter: " + e.getMessage());
+                    System.err.println("Filter will be ignored. Continuing without filter...");
+                }
+            }
+
+            // Calculate column widths for better formatting
+            Map<Integer, Integer> columnWidths = calculateColumnWidths(table, rowType, readBuilder, pageSize * 2);
+
+            // Print table header
+            System.out.println("\nTable: " + database + "." + tableName);
+            System.out.println("====================");
+            printHeader(rowType, columnWidths);
+
+            // Read data with pagination
+            List<Split> splits = readBuilder.newScan().plan().splits();
+            TableRead tableRead = readBuilder.newRead();
+
+            int totalRowCount = 0;
+            int currentPageCount = 0;
+            boolean shouldContinue = true;
+            Scanner scanner = new Scanner(System.in);
+
+            for (Split split : splits) {
+                if (!shouldContinue) {
+                    break;
+                }
+
+                try (RecordReader<InternalRow> reader = tableRead.createReader(split)) {
+                    RecordReader.RecordIterator<InternalRow> iterator;
+                    while ((iterator = reader.readBatch()) != null) {
+                        InternalRow row;
+                        while ((row = iterator.next()) != null) {
+                            printRow(row, rowType, columnWidths);
+                            totalRowCount++;
+                            currentPageCount++;
+
+                            // Check if page is full
+                            if (currentPageCount >= pageSize) {
+                                System.out.println("\n--- Page complete (" + currentPageCount + " rows) ---");
+                                System.out.print("Type 'it' to continue, or press Enter to stop: ");
+
+                                String input = scanner.nextLine().trim();
+
+                                if (!"it".equalsIgnoreCase(input)) {
+                                    shouldContinue = false;
+                                    iterator.releaseBatch();
+                                    break;
+                                }
+
+                                // Reset page count and continue
+                                currentPageCount = 0;
+                                System.out.println();
+                            }
+                        }
+                        iterator.releaseBatch();
+                        if (!shouldContinue) {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            System.out.println("\nTotal displayed: " + totalRowCount + " row(s)\n");
         } catch (Exception e) {
             System.err.println("Failed to query data: " + e.getMessage());
             e.printStackTrace();
