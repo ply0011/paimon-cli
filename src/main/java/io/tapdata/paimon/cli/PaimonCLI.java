@@ -27,6 +27,7 @@ public class PaimonCLI {
     private LineReader lineReader;
     private Terminal terminal;
     private ConfigHistoryManager configHistoryManager;
+    private String currentDatabase; // 当前选中的数据库
 
     public PaimonCLI() {
         try {
@@ -249,7 +250,10 @@ public class PaimonCLI {
 
         while (true) {
             try {
-                String input = lineReader.readLine("paimon> ");
+                // 动态生成提示符，显示当前数据库
+                String prompt = currentDatabase != null ?
+                    "paimon [" + currentDatabase + "]> " : "paimon> ";
+                String input = lineReader.readLine(prompt);
 
                 if (input == null || input.trim().isEmpty()) {
                     continue;
@@ -264,6 +268,8 @@ public class PaimonCLI {
                     break;
                 } else if ("help".equals(command)) {
                     printHelp();
+                } else if ("use".equals(command)) {
+                    handleUseCommand(parts);
                 } else if ("show".equals(command)) {
                     handleShowCommand(parts);
                 } else if ("desc".equals(command) || "describe".equals(command)) {
@@ -295,16 +301,24 @@ public class PaimonCLI {
     private void printHelp() {
         System.out.println("\nAvailable commands:");
         System.out.println("  show databases                              - Show all databases");
-        System.out.println("  show tables <database>                      - Show all tables in a database");
+        System.out.println("  show tables [<database>]                    - Show all tables in a database");
+        System.out.println("                                                (use current database if not specified)");
+        System.out.println("  use <database>                              - Set current database");
         System.out.println("  desc <database>.<table>                     - Show table structure");
-        System.out.println("  count <database>.<table>                    - Count total rows in a table");
+        System.out.println("  desc <table>                                - Show table structure (use current database)");
+        System.out.println("  count <database>.<table> [where <filter>]   - Count total rows in a table with optional filter");
+        System.out.println("  count <table> [where <filter>]              - Count total rows (use current database)");
         System.out.println("  select <database>.<table> [limit|all] [where <filter>]");
         System.out.println("                                              - Query table data with optional limit and filter");
+        System.out.println("  select <table> [limit|all] [where <filter>] - Query table (use current database)");
         System.out.println("                                                Use 'all' for pagination mode (5 rows/page)");
         System.out.println("  help                                        - Show help information");
         System.out.println("  exit/quit                                   - Exit the program");
         System.out.println();
         System.out.println("Query examples:");
+        System.out.println("  use default                                 - Set current database to 'default'");
+        System.out.println("  show tables                                 - Show tables in current database");
+        System.out.println("  select users 10                             - Show first 10 rows (using current database)");
         System.out.println("  select default.users 10                     - Show first 10 rows");
         System.out.println("  select default.users all                    - Show all rows with pagination (type 'it' to continue)");
         System.out.println("  select default.users 10 where age>18        - Show 10 rows where age > 18");
@@ -314,11 +328,36 @@ public class PaimonCLI {
     }
 
     /**
+     * Handle use command
+     */
+    private void handleUseCommand(String[] parts) {
+        if (parts.length < 2) {
+            System.err.println("Usage: use <database>");
+            return;
+        }
+
+        String database = parts[1];
+
+        // 验证数据库是否存在
+        try {
+            if (!catalogManager.databaseExists(database)) {
+                System.err.println("Database does not exist: " + database);
+                return;
+            }
+
+            currentDatabase = database;
+            System.out.println("Database changed to: " + currentDatabase);
+        } catch (Exception e) {
+            System.err.println("Failed to switch database: " + e.getMessage());
+        }
+    }
+
+    /**
      * Handle show command
      */
     private void handleShowCommand(String[] parts) {
         if (parts.length < 2) {
-            System.err.println("Usage: show databases or show tables <database>");
+            System.err.println("Usage: show databases or show tables [<database>]");
             return;
         }
 
@@ -327,11 +366,21 @@ public class PaimonCLI {
         if ("databases".equals(subCommand)) {
             metadataService.showDatabases();
         } else if ("tables".equals(subCommand)) {
-            if (parts.length < 3) {
-                System.err.println("Usage: show tables <database>");
-                return;
+            String database;
+
+            if (parts.length >= 3) {
+                // 格式: show tables <database>
+                database = parts[2];
+            } else {
+                // 格式: show tables (使用当前数据库)
+                if (currentDatabase == null) {
+                    System.err.println("No database selected. Use 'use <database>' first or specify as 'show tables <database>'");
+                    return;
+                }
+                database = currentDatabase;
             }
-            metadataService.showTables(parts[2]);
+
+            metadataService.showTables(database);
         } else {
             System.err.println("Unknown show subcommand: " + subCommand);
         }
@@ -342,17 +391,32 @@ public class PaimonCLI {
      */
     private void handleDescribeCommand(String[] parts) {
         if (parts.length < 2) {
-            System.err.println("Usage: desc <database>.<table>");
+            System.err.println("Usage: desc <database>.<table> or desc <table> (when database is set)");
             return;
         }
 
         String[] dbTable = parts[1].split("\\.");
-        if (dbTable.length != 2) {
-            System.err.println("Invalid table name format, should be: <database>.<table>");
+        String database;
+        String tableName;
+
+        if (dbTable.length == 2) {
+            // 格式: database.table
+            database = dbTable[0];
+            tableName = dbTable[1];
+        } else if (dbTable.length == 1) {
+            // 格式: table (使用当前数据库)
+            if (currentDatabase == null) {
+                System.err.println("No database selected. Use 'use <database>' first or specify as <database>.<table>");
+                return;
+            }
+            database = currentDatabase;
+            tableName = dbTable[0];
+        } else {
+            System.err.println("Invalid table name format, should be: <database>.<table> or <table>");
             return;
         }
 
-        metadataService.describeTable(dbTable[0], dbTable[1]);
+        metadataService.describeTable(database, tableName);
     }
 
     /**
@@ -360,27 +424,59 @@ public class PaimonCLI {
      */
     private void handleCountCommand(String[] parts) {
         if (parts.length < 2) {
-            System.err.println("Usage: count <database>.<table>");
+            System.err.println("Usage: count <database>.<table> [where <filter>] or count <table> [where <filter>] (when database is set)");
             return;
         }
 
         String[] dbTable = parts[1].split("\\.");
-        if (dbTable.length != 2) {
-            System.err.println("Invalid table name format, should be: <database>.<table>");
+        String database;
+        String tableName;
+
+        if (dbTable.length == 2) {
+            // 格式: database.table
+            database = dbTable[0];
+            tableName = dbTable[1];
+        } else if (dbTable.length == 1) {
+            // 格式: table (使用当前数据库)
+            if (currentDatabase == null) {
+                System.err.println("No database selected. Use 'use <database>' first or specify as <database>.<table>");
+                return;
+            }
+            database = currentDatabase;
+            tableName = dbTable[0];
+        } else {
+            System.err.println("Invalid table name format, should be: <database>.<table> or <table>");
             return;
         }
 
-        dataQueryService.countTable(dbTable[0], dbTable[1]);
+        // Parse filter expression if "where" keyword is present
+        String filter = null;
+        if (parts.length > 2 && parts[2].equalsIgnoreCase("where")) {
+            // Collect remaining parts as filter expression
+            StringBuilder filterBuilder = new StringBuilder();
+            for (int i = 3; i < parts.length; i++) {
+                if (i > 3) {
+                    filterBuilder.append(" ");
+                }
+                filterBuilder.append(parts[i]);
+            }
+            filter = filterBuilder.toString();
+        }
+
+        dataQueryService.countTable(database, tableName, filter);
     }
 
     /**
      * Handle select command
      * Supports: select <database>.<table> [limit|all] [where <filter>]
+     * Supports: select <table> [limit|all] [where <filter>] (when database is set)
      */
     private void handleSelectCommand(String[] parts) {
         if (parts.length < 2) {
             System.err.println("Usage: select <database>.<table> [limit|all] [where <filter>]");
+            System.err.println("   or: select <table> [limit|all] [where <filter>] (when database is set)");
             System.err.println("Example: select default.users 10");
+            System.err.println("Example: select users 10 (using current database)");
             System.err.println("Example: select default.users all");
             System.err.println("Example: select default.users all where age>18");
             System.err.println("Example: select default.users 10 where age>18");
@@ -390,8 +486,26 @@ public class PaimonCLI {
         }
 
         String[] dbTable = parts[1].split("\\.");
-        if (dbTable.length != 2) {
-            System.err.println("Invalid table name format, should be: <database>.<table>");
+        String database;
+        String tableName;
+        int currentIndex;
+
+        if (dbTable.length == 2) {
+            // 格式: database.table
+            database = dbTable[0];
+            tableName = dbTable[1];
+            currentIndex = 2;
+        } else if (dbTable.length == 1) {
+            // 格式: table (使用当前数据库)
+            if (currentDatabase == null) {
+                System.err.println("No database selected. Use 'use <database>' first or specify as <database>.<table>");
+                return;
+            }
+            database = currentDatabase;
+            tableName = dbTable[0];
+            currentIndex = 2;
+        } else {
+            System.err.println("Invalid table name format, should be: <database>.<table> or <table>");
             return;
         }
 
@@ -400,7 +514,6 @@ public class PaimonCLI {
         boolean usePagination = false;
 
         // Parse remaining arguments
-        int currentIndex = 2;
 
         // Check if next argument is a number (limit) or "all" keyword
         if (currentIndex < parts.length) {
@@ -433,9 +546,9 @@ public class PaimonCLI {
 
         // Execute query with or without pagination
         if (usePagination) {
-            dataQueryService.selectTableWithPagination(dbTable[0], dbTable[1], filter);
+            dataQueryService.selectTableWithPagination(database, tableName, filter);
         } else {
-            dataQueryService.selectTable(dbTable[0], dbTable[1], limit, filter);
+            dataQueryService.selectTable(database, tableName, limit, filter);
         }
     }
 

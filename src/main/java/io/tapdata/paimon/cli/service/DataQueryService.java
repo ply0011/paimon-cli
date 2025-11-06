@@ -1,7 +1,10 @@
 package io.tapdata.paimon.cli.service;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import io.tapdata.paimon.cli.catalog.CatalogManager;
 import org.apache.paimon.Snapshot;
+import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.predicate.PredicateBuilder;
@@ -17,6 +20,7 @@ import org.apache.paimon.utils.SnapshotManager;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
@@ -38,6 +42,13 @@ public class DataQueryService {
      * Count total rows in a table
      */
     public void countTable(String database, String tableName) {
+        countTable(database, tableName, null);
+    }
+
+    /**
+     * Count total rows in a table with optional filter
+     */
+    public void countTable(String database, String tableName, String filterExpression) {
         try {
             if (!catalogManager.tableExists(database, tableName)) {
                 System.err.println("Table does not exist: " + database + "." + tableName);
@@ -45,9 +56,27 @@ public class DataQueryService {
             }
 
             Table table = catalogManager.getTable(database, tableName);
-            long count = countRows(table);
+            RowType rowType = table.rowType();
 
-            System.out.println("\nTotal rows in table " + database + "." + tableName + ": " + count + "\n");
+            // Parse filter predicates if provided
+            List<Predicate> predicates = new ArrayList<>();
+            if (filterExpression != null && !filterExpression.trim().isEmpty()) {
+                try {
+                    predicates = parseFilter(filterExpression, rowType);
+                    if (!predicates.isEmpty()) {
+                        System.out.println("\nApplied filter: " + filterExpression);
+                    }
+                } catch (Exception e) {
+                    System.err.println("Failed to parse filter: " + e.getMessage());
+                    System.err.println("Filter will be ignored. Continuing without filter...");
+                }
+            }
+
+            long count = countRows(table, predicates);
+
+            String filterInfo = (filterExpression != null && !filterExpression.trim().isEmpty())
+                ? " (with filter)" : "";
+            System.out.println("\nTotal rows in table " + database + "." + tableName + filterInfo + ": " + count + "\n");
         } catch (Exception e) {
             System.err.println("Failed to count rows: " + e.getMessage());
             e.printStackTrace();
@@ -77,11 +106,13 @@ public class DataQueryService {
             // Build read builder
             ReadBuilder readBuilder = table.newReadBuilder();
 
-            // Parse and apply filter if provided
+            // Parse filter predicates
+            List<Predicate> predicates = new ArrayList<>();
             if (filterExpression != null && !filterExpression.trim().isEmpty()) {
                 try {
-                    List<Predicate> predicates = parseFilter(filterExpression, rowType);
+                    predicates = parseFilter(filterExpression, rowType);
                     if (!predicates.isEmpty()) {
+                        // Apply filter to readBuilder for file-level pruning
                         readBuilder = readBuilder.withFilter(predicates);
                         System.out.println("\nApplied filter: " + filterExpression);
                     }
@@ -91,18 +122,11 @@ public class DataQueryService {
                 }
             }
 
-            // Calculate column widths for better formatting
-            Map<Integer, Integer> columnWidths = calculateColumnWidths(table, rowType, readBuilder, limit);
-
-            // Print table header
-            System.out.println("\nTable: " + database + "." + tableName);
-            System.out.println("====================");
-            printHeader(rowType, columnWidths);
-
-            // Read data
+            // Read data into list
             List<Split> splits = readBuilder.newScan().plan().splits();
             TableRead tableRead = readBuilder.newRead();
 
+            List<Map<String, Object>> rows = new ArrayList<>();
             int rowCount = 0;
             boolean limitReached = false;
 
@@ -116,7 +140,13 @@ public class DataQueryService {
                     while ((iterator = reader.readBatch()) != null) {
                         InternalRow row;
                         while ((row = iterator.next()) != null) {
-                            printRow(row, rowType, columnWidths);
+                            // Apply row-level filtering if predicates exist
+                            if (!predicates.isEmpty() && !matchesPredicates(row, predicates)) {
+                                continue;
+                            }
+
+                            Map<String, Object> rowMap = convertRowToMap(row, rowType);
+                            rows.add(rowMap);
                             rowCount++;
 
                             if (limit > 0 && rowCount >= limit) {
@@ -132,6 +162,10 @@ public class DataQueryService {
                 }
             }
 
+            // Print as JSON
+            System.out.println("\nTable: " + database + "." + tableName);
+            System.out.println("====================");
+            printAsJson(rows);
             System.out.println("\nDisplayed " + rowCount + " row(s)\n");
         } catch (Exception e) {
             System.err.println("Failed to query data: " + e.getMessage());
@@ -163,11 +197,13 @@ public class DataQueryService {
             // Build read builder
             ReadBuilder readBuilder = table.newReadBuilder();
 
-            // Parse and apply filter if provided
+            // Parse filter predicates
+            List<Predicate> predicates = new ArrayList<>();
             if (filterExpression != null && !filterExpression.trim().isEmpty()) {
                 try {
-                    List<Predicate> predicates = parseFilter(filterExpression, rowType);
+                    predicates = parseFilter(filterExpression, rowType);
                     if (!predicates.isEmpty()) {
+                        // Apply filter to readBuilder for file-level pruning
                         readBuilder = readBuilder.withFilter(predicates);
                         System.out.println("\nApplied filter: " + filterExpression);
                     }
@@ -177,20 +213,16 @@ public class DataQueryService {
                 }
             }
 
-            // Calculate column widths for better formatting
-            Map<Integer, Integer> columnWidths = calculateColumnWidths(table, rowType, readBuilder, pageSize * 2);
-
             // Print table header
             System.out.println("\nTable: " + database + "." + tableName);
             System.out.println("====================");
-            printHeader(rowType, columnWidths);
 
             // Read data with pagination
             List<Split> splits = readBuilder.newScan().plan().splits();
             TableRead tableRead = readBuilder.newRead();
 
             int totalRowCount = 0;
-            int currentPageCount = 0;
+            List<Map<String, Object>> currentPageRows = new ArrayList<>();
             boolean shouldContinue = true;
             Scanner scanner = new Scanner(System.in);
 
@@ -204,13 +236,19 @@ public class DataQueryService {
                     while ((iterator = reader.readBatch()) != null) {
                         InternalRow row;
                         while ((row = iterator.next()) != null) {
-                            printRow(row, rowType, columnWidths);
+                            // Apply row-level filtering if predicates exist
+                            if (!predicates.isEmpty() && !matchesPredicates(row, predicates)) {
+                                continue;
+                            }
+
+                            Map<String, Object> rowMap = convertRowToMap(row, rowType);
+                            currentPageRows.add(rowMap);
                             totalRowCount++;
-                            currentPageCount++;
 
                             // Check if page is full
-                            if (currentPageCount >= pageSize) {
-                                System.out.println("\n--- Page complete (" + currentPageCount + " rows) ---");
+                            if (currentPageRows.size() >= pageSize) {
+                                printAsJson(currentPageRows);
+                                System.out.println("\n--- Page complete (" + currentPageRows.size() + " rows) ---");
                                 System.out.print("Type 'it' to continue, or press Enter to stop: ");
 
                                 String input = scanner.nextLine().trim();
@@ -221,8 +259,8 @@ public class DataQueryService {
                                     break;
                                 }
 
-                                // Reset page count and continue
-                                currentPageCount = 0;
+                                // Reset page and continue
+                                currentPageRows.clear();
                                 System.out.println();
                             }
                         }
@@ -232,6 +270,11 @@ public class DataQueryService {
                         }
                     }
                 }
+            }
+
+            // Print remaining rows if any
+            if (!currentPageRows.isEmpty()) {
+                printAsJson(currentPageRows);
             }
 
             System.out.println("\nTotal displayed: " + totalRowCount + " row(s)\n");
@@ -245,7 +288,14 @@ public class DataQueryService {
      * Count total rows in a table using snapshot statistics (optimized)
      * Falls back to full scan if statistics are not available
      */
-    private long countRows(Table table) throws Exception {
+    private long countRows(Table table, List<Predicate> predicates) throws Exception {
+        // If filter is applied, we cannot use snapshot statistics
+        // Must perform full scan with row-level filtering
+        if (predicates != null && !predicates.isEmpty()) {
+            System.out.println("(Performing full table scan with filter - this may take a while for large tables)");
+            return countRowsByFullScan(table, predicates);
+        }
+
         // Try to get count from snapshot statistics first (fast path)
         try {
             if (table instanceof FileStoreTable) {
@@ -271,14 +321,20 @@ public class DataQueryService {
 
         // Fallback: full table scan (slow path)
         System.out.println("(Performing full table scan to count rows - this may take a while for large tables)");
-        return countRowsByFullScan(table);
+        return countRowsByFullScan(table, predicates);
     }
 
     /**
      * Count rows by full table scan (fallback method)
      */
-    private long countRowsByFullScan(Table table) throws Exception {
+    private long countRowsByFullScan(Table table, List<Predicate> predicates) throws Exception {
         ReadBuilder readBuilder = table.newReadBuilder();
+
+        // Apply filter to readBuilder for file-level pruning if predicates exist
+        if (predicates != null && !predicates.isEmpty()) {
+            readBuilder = readBuilder.withFilter(predicates);
+        }
+
         List<Split> splits = readBuilder.newScan().plan().splits();
         TableRead tableRead = readBuilder.newRead();
 
@@ -289,6 +345,10 @@ public class DataQueryService {
                 while ((iterator = reader.readBatch()) != null) {
                     InternalRow row;
                     while ((row = iterator.next()) != null) {
+                        // Apply row-level filtering if predicates exist
+                        if (predicates != null && !predicates.isEmpty() && !matchesPredicates(row, predicates)) {
+                            continue;
+                        }
                         count++;
                     }
                     iterator.releaseBatch();
@@ -522,9 +582,10 @@ public class DataQueryService {
                 return Double.parseDouble(valueStr);
             case CHAR:
             case VARCHAR:
-                return valueStr;
+                // For string types, return BinaryString instead of String
+                return BinaryString.fromString(valueStr);
             default:
-                return valueStr;
+                return BinaryString.fromString(valueStr);
         }
     }
 
@@ -570,6 +631,44 @@ public class DataQueryService {
                     return "N/A";
                 }
         }
+    }
+
+    /**
+     * Convert InternalRow to Map
+     */
+    private Map<String, Object> convertRowToMap(InternalRow row, RowType rowType) {
+        Map<String, Object> rowMap = new LinkedHashMap<>();
+        List<DataField> fields = rowType.getFields();
+
+        for (int i = 0; i < fields.size(); i++) {
+            DataField field = fields.get(i);
+            Object value = extractValue(row, i, field);
+            rowMap.put(field.name(), value);
+        }
+
+        return rowMap;
+    }
+
+    /**
+     * Print list of rows as pretty JSON
+     */
+    private void printAsJson(List<Map<String, Object>> rows) {
+        Gson gson = new GsonBuilder().setPrettyPrinting().create();
+        String json = gson.toJson(rows);
+        System.out.println(json);
+    }
+
+    /**
+     * Check if a row matches all predicates
+     * This is used for row-level filtering after file-level filtering
+     */
+    private boolean matchesPredicates(InternalRow row, List<Predicate> predicates) {
+        for (Predicate predicate : predicates) {
+            if (!predicate.test(row)) {
+                return false;
+            }
+        }
+        return true;
     }
 }
 

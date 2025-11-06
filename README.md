@@ -7,6 +7,7 @@
 - ✅ 支持 Local 和 S3 两种存储类型
 - ✅ 查看数据库列表
 - ✅ 查看表列表
+- ✅ 切换当前数据库（use database）
 - ✅ 查看表结构（字段、类型、主键、分区键等）
 - ✅ 查询表总行数
 - ✅ 查询表数据（支持 limit、分页查询、条件过滤）
@@ -67,46 +68,89 @@ paimon> show databases
 
 #### 查看指定数据库的所有表
 ```
+# 指定数据库名
 paimon> show tables my_database
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> show tables
 ```
+
+#### 切换当前数据库
+使用 `use` 命令可以设置当前数据库，之后的命令可以省略数据库名：
+```
+paimon> use my_database
+Database changed to: my_database
+paimon [my_database]>
+```
+
+切换数据库后，命令提示符会显示当前数据库名称。
 
 #### 查看表结构
 ```
+# 使用完整格式
 paimon> desc my_database.my_table
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> desc my_table
 ```
 
 #### 查询表总行数
 ```
+# 使用完整格式
 paimon> count my_database.my_table
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> count my_table
 ```
 
 #### 查询表数据（默认显示 10 行）
 ```
+# 使用完整格式
 paimon> select my_database.my_table
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> select my_table
 ```
 
 #### 查询表数据（指定 limit）
 ```
+# 使用完整格式
 paimon> select my_database.my_table 20
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> select my_table 20
 ```
 
 #### 查询表数据（分页查询所有数据）
 使用 `all` 关键字启用分页模式，每页显示 5 行数据，输入 `it` 继续查看下一页：
 ```
+# 使用完整格式
 paimon> select my_database.my_table all
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> select my_table all
 ```
 
 #### 查询表数据（使用 filter 过滤）
 ```
+# 使用完整格式
 paimon> select my_database.my_table where age>18
 paimon> select my_database.my_table 10 where age>18
 paimon> select my_database.my_table where age>=18 AND name=Alice
 paimon> select my_database.my_table 20 where id!=5
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> select my_table where age>18
+paimon [my_database]> select my_table 10 where age>18
 ```
 
 #### 查询表数据（分页查询 + 过滤）
 ```
+# 使用完整格式
 paimon> select my_database.my_table all where age>18
+
+# 使用当前数据库（需先执行 use 命令）
+paimon [my_database]> select my_table all where age>18
 ```
 
 支持的过滤操作符：
@@ -151,14 +195,25 @@ paimon> quit
 
 可用命令:
   show databases                              - 显示所有数据库
-  show tables <database>                      - 显示指定数据库的所有表
+  show tables [<database>]                    - 显示指定数据库的所有表
+                                                (使用当前数据库如果未指定)
+  use <database>                              - 设置当前数据库
   desc <database>.<table>                     - 显示表结构
+  desc <table>                                - 显示表结构（使用当前数据库）
   count <database>.<table>                    - 查询表的总行数
+  count <table>                               - 查询表的总行数（使用当前数据库）
   select <database>.<table> [limit|all] [where <filter>]
                                               - 查询表数据，可选 limit 和 filter 参数
+  select <table> [limit|all] [where <filter>] - 查询表数据（使用当前数据库）
                                                 使用 'all' 启用分页模式（每页 5 行）
   help                                        - 显示帮助信息
   exit/quit                                   - 退出程序
+
+查询示例:
+  use default                                 - 设置当前数据库为 'default'
+  show tables                                 - 显示当前数据库的表
+  select users 10                             - 显示前 10 行（使用当前数据库）
+  select default.users 10                     - 显示前 10 行
 
 paimon> show databases
 
@@ -167,7 +222,10 @@ paimon> show databases
   - default
 总计: 1 个数据库
 
-paimon> show tables default
+paimon> use default
+Database changed to: default
+
+paimon [default]> show tables
 
 数据库 'default' 的表列表:
 ====================
@@ -175,24 +233,24 @@ paimon> show tables default
   - orders
 总计: 2 个表
 
-paimon> desc default.users
+paimon [default]> desc users
 
 表: default.users
 ====================
 字段信息:
-字段名                           类型                            可空        
+字段名                           类型                            可空
 --------------------------------------------------------------------------------
-id                           BIGINT                         NO         
-name                         STRING                         YES        
-age                          INT                            YES        
+id                           BIGINT                         NO
+name                         STRING                         YES
+age                          INT                            YES
 
 主键: id
 
-paimon> count default.users
+paimon [default]> count users
 
 表 default.users 的总行数: 1000
 
-paimon> select default.users 5
+paimon [default]> select users 5
 
 表: default.users
 ====================
@@ -206,7 +264,7 @@ id                   | name                 | age                  |
 
 显示 5 行数据
 
-paimon> select default.users where age>30
+paimon [default]> select users where age>30
 
 Applied filter: age>30
 
@@ -219,7 +277,7 @@ id                   | name                 | age                  |
 
 显示 2 行数据
 
-paimon> select default.users all
+paimon [default]> select users all
 
 表: default.users
 ====================
@@ -252,8 +310,10 @@ paimon> exit
 ## 技术栈
 
 - Java 17
-- Apache Paimon 0.9.0
+- Apache Paimon 1.2.0
 - Hadoop 3.3.6 (用于文件系统支持)
+- AWS SDK 1.12.367 (用于 S3 支持)
+- JLine 3.25.0 (用于命令行交互)
 - Maven
 
 ## 注意事项
