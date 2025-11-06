@@ -1,16 +1,19 @@
 package io.tapdata.paimon.cli.service;
 
 import io.tapdata.paimon.cli.catalog.CatalogManager;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.predicate.PredicateBuilder;
 import org.apache.paimon.reader.RecordReader;
+import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.table.source.ReadBuilder;
 import org.apache.paimon.table.source.Split;
 import org.apache.paimon.table.source.TableRead;
 import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.RowType;
+import org.apache.paimon.utils.SnapshotManager;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -136,9 +139,42 @@ public class DataQueryService {
     }
 
     /**
-     * Count total rows in a table
+     * Count total rows in a table using snapshot statistics (optimized)
+     * Falls back to full scan if statistics are not available
      */
     private long countRows(Table table) throws Exception {
+        // Try to get count from snapshot statistics first (fast path)
+        try {
+            if (table instanceof FileStoreTable) {
+                FileStoreTable fileStoreTable = (FileStoreTable) table;
+                SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
+                Long latestSnapshotId = snapshotManager.latestSnapshotId();
+
+                if (latestSnapshotId != null) {
+                    Snapshot snapshot = snapshotManager.snapshot(latestSnapshotId);
+                    if (snapshot != null) {
+                        Long totalRecordCount = snapshot.totalRecordCount();
+                        if (totalRecordCount != null) {
+                            System.out.println("(Using snapshot statistics for fast count)");
+                            return totalRecordCount;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // If snapshot statistics are not available, fall back to full scan
+            System.out.println("(Snapshot statistics not available, using full scan)");
+        }
+
+        // Fallback: full table scan (slow path)
+        System.out.println("(Performing full table scan to count rows - this may take a while for large tables)");
+        return countRowsByFullScan(table);
+    }
+
+    /**
+     * Count rows by full table scan (fallback method)
+     */
+    private long countRowsByFullScan(Table table) throws Exception {
         ReadBuilder readBuilder = table.newReadBuilder();
         List<Split> splits = readBuilder.newScan().plan().splits();
         TableRead tableRead = readBuilder.newRead();
